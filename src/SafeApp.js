@@ -53,6 +53,7 @@ function SafeApp() {
   const [query, setQuery] = useState('');
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   
   // Estados para subida de imágenes
   const [uploadFile, setUploadFile] = useState(null);
@@ -61,47 +62,147 @@ function SafeApp() {
   const [uploadTags, setUploadTags] = useState('');
   const [uploading, setUploading] = useState(false);
 
-  // Inicializar datos de forma segura
-  useEffect(() => {
-    console.log('🔄 Initializing SafeApp...');
-    
+  // Función para cargar pins desde S3
+  const loadPinsFromS3 = async () => {
     try {
-      const storedPins = localStorage.getItem('arcadia_pins');
-      if (storedPins) {
-        const parsed = JSON.parse(storedPins);
-        if (Array.isArray(parsed)) {
-          setPins(parsed);
-          console.log('✅ Loaded pins from localStorage:', parsed.length);
-        } else {
-          setPins(samplePins);
-          console.log('✅ Using sample pins (invalid localStorage data)');
+      console.log('🔄 Loading pins from S3...');
+      setSyncing(true);
+      
+      const urlResult = await getUrl({
+        key: 'shared/pins-database.json',
+        options: {
+          accessLevel: 'guest'
+        }
+      });
+      
+      const response = await fetch(urlResult.url.toString());
+      if (response.ok) {
+        const s3Pins = await response.json();
+        if (Array.isArray(s3Pins) && s3Pins.length > 0) {
+          console.log('✅ Loaded pins from S3:', s3Pins.length);
+          setPins(s3Pins);
+          
+          // Guardar en localStorage como cache
+          localStorage.setItem('arcadia_pins', JSON.stringify(s3Pins));
+          localStorage.setItem('arcadia_pins_timestamp', Date.now().toString());
+          
+          return s3Pins;
         }
       } else {
-        setPins(samplePins);
-        console.log('✅ Using sample pins (no localStorage data)');
+        console.log('ℹ️ No pins database found in S3, creating new one');
       }
     } catch (error) {
-      console.warn('⚠️ Error loading pins from localStorage:', error);
-      setPins(samplePins);
+      console.warn('⚠️ Error loading pins from S3:', error);
+    } finally {
+      setSyncing(false);
     }
+    return null;
+  };
+
+  // Función para guardar pins en S3
+  const savePinsToS3 = async (pinsToSave) => {
+    try {
+      console.log('💾 Saving pins to S3...');
+      setSyncing(true);
+      
+      const jsonData = JSON.stringify(pinsToSave, null, 2);
+      const blob = new Blob([jsonData], { type: 'application/json' });
+      
+      await uploadData({
+        key: 'shared/pins-database.json',
+        data: blob,
+        options: {
+          contentType: 'application/json',
+          accessLevel: 'guest'
+        }
+      }).result;
+      
+      console.log('✅ Pins saved to S3 successfully');
+      
+      // Actualizar timestamp en localStorage
+      localStorage.setItem('arcadia_pins_timestamp', Date.now().toString());
+      
+    } catch (error) {
+      console.error('❌ Error saving pins to S3:', error);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // Inicializar datos con sincronización S3
+  useEffect(() => {
+    console.log('🔄 Initializing SafeApp with S3 sync...');
     
-    // IMPORTANTE: Siempre terminar el loading
-    setTimeout(() => {
+    const initializePins = async () => {
+      // Primero intentar cargar desde localStorage (cache rápido)
+      let localPins = [];
+      let useLocal = false;
+      
+      try {
+        const storedPins = localStorage.getItem('arcadia_pins');
+        const timestamp = localStorage.getItem('arcadia_pins_timestamp');
+        const cacheAge = Date.now() - parseInt(timestamp || '0');
+        const cacheMaxAge = 5 * 60 * 1000; // 5 minutos
+        
+        if (storedPins && cacheAge < cacheMaxAge) {
+          const parsed = JSON.parse(storedPins);
+          if (Array.isArray(parsed)) {
+            localPins = parsed;
+            useLocal = true;
+            console.log('✅ Using cached pins from localStorage:', parsed.length);
+          }
+        }
+      } catch (error) {
+        console.warn('⚠️ Error reading localStorage cache:', error);
+      }
+
+      // Si no hay cache válido o es muy viejo, cargar desde S3
+      if (!useLocal) {
+        const s3Pins = await loadPinsFromS3();
+        if (s3Pins) {
+          return; // Ya se actualizó el estado en loadPinsFromS3
+        }
+        
+        // Si no hay datos en S3, usar sample data y guardar
+        console.log('✅ Using sample pins (no S3 data)');
+        setPins(samplePins);
+        await savePinsToS3(samplePins);
+      } else {
+        setPins(localPins);
+        
+        // Cargar desde S3 en background para sincronizar
+        loadPinsFromS3().then((s3Pins) => {
+          if (s3Pins && JSON.stringify(s3Pins) !== JSON.stringify(localPins)) {
+            console.log('🔄 Found newer pins in S3, updating...');
+          }
+        });
+      }
+      
       setLoading(false);
       console.log('✅ SafeApp initialization complete');
-    }, 100);
+    };
+
+    initializePins();
   }, []);
 
-  // Guardar pins de forma segura
+  // Guardar pins de forma segura (localStorage + S3)
   useEffect(() => {
-    if (!loading && pins.length > 0) {
+    if (!loading && pins.length > 0 && !syncing) {
+      // Guardar en localStorage inmediatamente (cache rápido)
       try {
         localStorage.setItem('arcadia_pins', JSON.stringify(pins));
       } catch (error) {
         console.warn('Error saving pins to localStorage:', error);
       }
+      
+      // Guardar en S3 con debounce para evitar demasiadas llamadas
+      const timeoutId = setTimeout(() => {
+        savePinsToS3(pins);
+      }, 2000); // Esperar 2 segundos antes de guardar en S3
+      
+      return () => clearTimeout(timeoutId);
     }
-  }, [pins, loading]);
+  }, [pins, loading, syncing]);
 
   // Función para guardar pin
   const savePin = useCallback((pinId) => {
@@ -303,11 +404,20 @@ function SafeApp() {
   }
 
   return (
-    <div style={{ 
-      minHeight: '100vh', 
-      backgroundColor: '#f5f5f5',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
-    }}>
+    <>
+      {/* CSS para animaciones */}
+      <style>{`
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `}</style>
+      
+      <div style={{ 
+        minHeight: '100vh', 
+        backgroundColor: '#f5f5f5',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+      }}>
       {/* Header */}
       <header style={{
         background: 'white',
@@ -362,6 +472,42 @@ function SafeApp() {
             gap: '15px',
             alignItems: 'center'
           }}>
+            {/* Botón de Sincronización */}
+            <button 
+              onClick={loadPinsFromS3}
+              disabled={syncing}
+              style={{
+                background: syncing ? '#ccc' : '#28a745',
+                color: 'white',
+                border: 'none',
+                padding: '8px 16px',
+                borderRadius: '20px',
+                cursor: syncing ? 'not-allowed' : 'pointer',
+                fontSize: '14px',
+                fontWeight: 'bold',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+              title="Sincronizar con otros dispositivos"
+            >
+              {syncing ? (
+                <>
+                  <div style={{
+                    width: '12px',
+                    height: '12px',
+                    border: '2px solid white',
+                    borderTop: '2px solid transparent',
+                    borderRadius: '50%',
+                    animation: 'spin 1s linear infinite'
+                  }}></div>
+                  Sync...
+                </>
+              ) : (
+                <>🔄 Sync</>
+              )}
+            </button>
+
             <button 
               onClick={() => setUploadModalOpen(true)}
               style={{
@@ -680,7 +826,8 @@ function SafeApp() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }
 
