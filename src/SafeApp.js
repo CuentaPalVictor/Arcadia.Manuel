@@ -1,4 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { Amplify } from 'aws-amplify';
+import { uploadData, getUrl } from 'aws-amplify/storage';
+import awsExports from './aws-exports';
+
+// Configurar Amplify
+Amplify.configure(awsExports);
 
 // Datos de muestra seguros
 const samplePins = [
@@ -39,6 +45,13 @@ function SafeApp() {
   const [query, setQuery] = useState('');
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  
+  // Estados para subida de imágenes
+  const [uploadFile, setUploadFile] = useState(null);
+  const [uploadPreview, setUploadPreview] = useState('');
+  const [uploadTitle, setUploadTitle] = useState('');
+  const [uploadTags, setUploadTags] = useState('');
+  const [uploading, setUploading] = useState(false);
 
   // Inicializar datos de forma segura
   useEffect(() => {
@@ -88,6 +101,136 @@ function SafeApp() {
       console.warn('Error saving user:', error);
     }
   }, [currentUser]);
+
+  // Función para manejar selección de archivo
+  const handleFileSelect = (event) => {
+    const file = event.target.files[0];
+    if (file && file.type.startsWith('image/')) {
+      setUploadFile(file);
+      
+      // Crear preview
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        setUploadPreview(e.target.result);
+      };
+      reader.readAsDataURL(file);
+      
+      // Sugerir título basado en el nombre del archivo
+      const fileName = file.name.replace(/\.[^/.]+$/, "");
+      setUploadTitle(fileName);
+    } else {
+      alert('Por favor selecciona un archivo de imagen válido.');
+    }
+  };
+
+  // Función para comprimir imagen
+  const compressImage = (dataUrl, maxWidth = 800) => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Calcular nuevas dimensiones
+        let { width, height } = img;
+        if (width > maxWidth) {
+          height = (height * maxWidth) / width;
+          width = maxWidth;
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        
+        // Dibujar imagen redimensionada
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // Convertir a blob
+        canvas.toBlob(resolve, 'image/jpeg', 0.8);
+      };
+      img.src = dataUrl;
+    });
+  };
+
+  // Función para subir imagen a AWS S3
+  const handleUploadSubmit = async () => {
+    if (!uploadFile || !uploadTitle.trim()) {
+      alert('Por favor completa el título y selecciona una imagen.');
+      return;
+    }
+
+    setUploading(true);
+    
+    try {
+      // Comprimir imagen
+      const compressedBlob = await compressImage(uploadPreview);
+      
+      // Generar key único para S3
+      const timestamp = Date.now();
+      const s3Key = `pins/${timestamp}_${uploadFile.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+      
+      console.log('Subiendo a S3 with key:', s3Key);
+      
+      // Subir a S3 usando AWS Amplify Storage
+      const result = await uploadData({
+        key: s3Key,
+        data: compressedBlob,
+        options: {
+          contentType: 'image/jpeg',
+          accessLevel: 'guest'
+        }
+      });
+      
+      console.log('Upload result:', result);
+      
+      // Obtener URL pública
+      const urlResult = await getUrl({
+        key: s3Key,
+        options: {
+          accessLevel: 'guest',
+          expiresIn: 3600 * 24 * 365 // 1 año
+        }
+      });
+      
+      console.log('URL result:', urlResult);
+      
+      // Crear nuevo pin
+      const newPin = {
+        id: timestamp.toString(),
+        src: urlResult.url.toString(),
+        title: uploadTitle.trim(),
+        author: currentUser.username,
+        userId: currentUser.id,
+        tags: uploadTags.split(',').map(t => t.trim()).filter(Boolean)
+      };
+      
+      // Agregar pin al estado
+      setPins(prevPins => [newPin, ...prevPins]);
+      
+      // Limpiar formulario
+      setUploadFile(null);
+      setUploadPreview('');
+      setUploadTitle('');
+      setUploadTags('');
+      setUploadModalOpen(false);
+      
+      alert('¡Pin subido exitosamente!');
+      
+    } catch (error) {
+      console.error('Error uploading to S3:', error);
+      alert('Error al subir la imagen: ' + (error.message || 'Error desconocido'));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // Función para cancelar subida
+  const cancelUpload = () => {
+    setUploadFile(null);
+    setUploadPreview('');
+    setUploadTitle('');
+    setUploadTags('');
+    setUploadModalOpen(false);
+  };
 
   // Filtrar pins de forma segura
   const filteredPins = pins.filter(pin => {
@@ -260,33 +403,241 @@ function SafeApp() {
           <div style={{
             background: 'white',
             borderRadius: '16px',
-            padding: '40px',
-            maxWidth: '500px',
+            padding: '30px',
+            maxWidth: '600px',
             width: '90%',
-            textAlign: 'center'
+            maxHeight: '90vh',
+            overflowY: 'auto'
           }}>
-            <h2 style={{ marginBottom: '20px', color: '#333' }}>
-              🚀 Función de subida
-            </h2>
-            <p style={{ color: '#666', marginBottom: '30px' }}>
-              La funcionalidad de subida a AWS S3 estará disponible próximamente.
-              Por ahora puedes explorar los pins existentes.
-            </p>
-            <button
-              onClick={() => setUploadModalOpen(false)}
-              style={{
-                background: '#e60023',
-                color: 'white',
-                border: 'none',
-                padding: '12px 24px',
-                borderRadius: '24px',
-                cursor: 'pointer',
-                fontSize: '16px',
-                fontWeight: 'bold'
-              }}
-            >
-              Cerrar
-            </button>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h2 style={{ margin: 0, color: '#333' }}>📌 Crear nuevo Pin</h2>
+              <button
+                onClick={cancelUpload}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '24px',
+                  cursor: 'pointer',
+                  color: '#666'
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {!uploadFile ? (
+              /* File Upload Area */
+              <div>
+                <div style={{
+                  border: '2px dashed #e1e1e1',
+                  borderRadius: '12px',
+                  padding: '40px',
+                  textAlign: 'center',
+                  backgroundColor: '#fafafa',
+                  marginBottom: '20px'
+                }}>
+                  <div style={{ fontSize: '48px', marginBottom: '16px' }}>🖼️</div>
+                  <h3 style={{ margin: '0 0 8px 0', color: '#333' }}>Selecciona una imagen</h3>
+                  <p style={{ color: '#666', marginBottom: '20px' }}>
+                    Arrastra y suelta o haz clic para seleccionar
+                  </p>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleFileSelect}
+                    style={{ display: 'none' }}
+                    id="file-upload"
+                  />
+                  <label
+                    htmlFor="file-upload"
+                    style={{
+                      display: 'inline-block',
+                      background: '#e60023',
+                      color: 'white',
+                      padding: '12px 24px',
+                      borderRadius: '24px',
+                      cursor: 'pointer',
+                      fontSize: '16px',
+                      fontWeight: 'bold'
+                    }}
+                  >
+                    Seleccionar imagen
+                  </label>
+                </div>
+                <p style={{ fontSize: '14px', color: '#666', textAlign: 'center' }}>
+                  Formatos soportados: JPG, PNG, GIF (máx. 10MB)
+                </p>
+              </div>
+            ) : (
+              /* Upload Form */
+              <div>
+                {/* Preview */}
+                <div style={{
+                  display: 'flex',
+                  gap: '20px',
+                  marginBottom: '20px',
+                  flexWrap: 'wrap'
+                }}>
+                  <div style={{ flex: '0 0 200px' }}>
+                    <img
+                      src={uploadPreview}
+                      alt="Preview"
+                      style={{
+                        width: '100%',
+                        height: '200px',
+                        objectFit: 'cover',
+                        borderRadius: '12px',
+                        border: '2px solid #e1e1e1'
+                      }}
+                    />
+                    <button
+                      onClick={() => {
+                        setUploadFile(null);
+                        setUploadPreview('');
+                      }}
+                      style={{
+                        width: '100%',
+                        marginTop: '10px',
+                        background: '#f0f0f0',
+                        border: 'none',
+                        padding: '8px',
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                        fontSize: '14px'
+                      }}
+                    >
+                      Cambiar imagen
+                    </button>
+                  </div>
+
+                  <div style={{ flex: '1', minWidth: '250px' }}>
+                    {/* Título */}
+                    <div style={{ marginBottom: '16px' }}>
+                      <label style={{
+                        display: 'block',
+                        marginBottom: '8px',
+                        fontWeight: 'bold',
+                        color: '#333'
+                      }}>
+                        Título *
+                      </label>
+                      <input
+                        type="text"
+                        value={uploadTitle}
+                        onChange={(e) => setUploadTitle(e.target.value)}
+                        placeholder="Dale un título a tu pin"
+                        style={{
+                          width: '100%',
+                          padding: '12px',
+                          border: '2px solid #e1e1e1',
+                          borderRadius: '8px',
+                          fontSize: '16px',
+                          outline: 'none'
+                        }}
+                        onFocus={(e) => e.target.style.borderColor = '#e60023'}
+                        onBlur={(e) => e.target.style.borderColor = '#e1e1e1'}
+                      />
+                    </div>
+
+                    {/* Tags */}
+                    <div style={{ marginBottom: '20px' }}>
+                      <label style={{
+                        display: 'block',
+                        marginBottom: '8px',
+                        fontWeight: 'bold',
+                        color: '#333'
+                      }}>
+                        Etiquetas
+                      </label>
+                      <input
+                        type="text"
+                        value={uploadTags}
+                        onChange={(e) => setUploadTags(e.target.value)}
+                        placeholder="arte, diseño, inspiración (separadas por comas)"
+                        style={{
+                          width: '100%',
+                          padding: '12px',
+                          border: '2px solid #e1e1e1',
+                          borderRadius: '8px',
+                          fontSize: '16px',
+                          outline: 'none'
+                        }}
+                        onFocus={(e) => e.target.style.borderColor = '#e60023'}
+                        onBlur={(e) => e.target.style.borderColor = '#e1e1e1'}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Buttons */}
+                <div style={{
+                  display: 'flex',
+                  gap: '12px',
+                  justifyContent: 'flex-end'
+                }}>
+                  <button
+                    onClick={cancelUpload}
+                    disabled={uploading}
+                    style={{
+                      background: 'white',
+                      border: '2px solid #e1e1e1',
+                      color: '#666',
+                      padding: '12px 24px',
+                      borderRadius: '24px',
+                      cursor: uploading ? 'not-allowed' : 'pointer',
+                      fontSize: '16px',
+                      fontWeight: 'bold'
+                    }}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={handleUploadSubmit}
+                    disabled={uploading || !uploadTitle.trim()}
+                    style={{
+                      background: uploading || !uploadTitle.trim() ? '#ccc' : '#e60023',
+                      color: 'white',
+                      border: 'none',
+                      padding: '12px 24px',
+                      borderRadius: '24px',
+                      cursor: uploading || !uploadTitle.trim() ? 'not-allowed' : 'pointer',
+                      fontSize: '16px',
+                      fontWeight: 'bold',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px'
+                    }}
+                  >
+                    {uploading ? (
+                      <>
+                        <div style={{
+                          width: '16px',
+                          height: '16px',
+                          border: '2px solid white',
+                          borderTop: '2px solid transparent',
+                          borderRadius: '50%',
+                          animation: 'spin 1s linear infinite'
+                        }}></div>
+                        Subiendo...
+                      </>
+                    ) : (
+                      'Crear Pin'
+                    )}
+                  </button>
+                </div>
+
+                {uploading && (
+                  <div style={{
+                    marginTop: '15px',
+                    textAlign: 'center',
+                    color: '#666',
+                    fontSize: '14px'
+                  }}>
+                    ☁️ Subiendo imagen a AWS S3...
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
