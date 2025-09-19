@@ -1,16 +1,17 @@
 const awsExports = {
-  aws_project_region: "us-east-1",
-  aws_user_files_s3_bucket: "arcadia.mx",
-  aws_user_files_s3_bucket_region: "us-east-1",
-  aws_cognito_identity_pool_id: "us-east-1:00000000-0000-0000-0000-000000000000", // Placeholder, cambiar por tu Identity Pool ID real
-  aws_cognito_region: "us-east-1",
+  Auth: {
+    region: "us-east-1",
+    identityPoolId: "us-east-1:e811d0ae-1685-4f0a-9e93-fcfc78c8c739" // ✅ Identity Pool ID real
+  },
   Storage: {
-    AWSS3: {
+    S3: {
       bucket: "arcadia.mx",
-      region: "us-east-1",
-      level: "public"
+      region: "us-east-1"
     }
   }
 };
+
+// Debug: Verificar configuración
+console.log('AWS Configuration:', awsExports);
 
 export default awsExports;
