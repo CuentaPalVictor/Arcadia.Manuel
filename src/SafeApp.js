@@ -53,7 +53,6 @@ function SafeApp() {
   const [query, setQuery] = useState('');
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
   
   // Estados para subida de imágenes
   const [uploadFile, setUploadFile] = useState(null);
@@ -62,7 +61,7 @@ function SafeApp() {
   const [uploadTags, setUploadTags] = useState('');
   const [uploading, setUploading] = useState(false);
 
-  // Estado para diagnósticos
+  // Estado para diagnósticos (simplificado)
   const [diagnostics, setDiagnostics] = useState({
     amplifyConfigured: false,
     s3Connection: false,
@@ -178,7 +177,6 @@ function SafeApp() {
   // Función para reparar URLs expiradas de imágenes S3
   const repairImageUrls = async () => {
     console.log('🔧 Iniciando reparación de URLs expiradas...');
-    setSyncing(true);
     
     try {
       const repairedPins = [];
@@ -231,15 +229,12 @@ function SafeApp() {
     } catch (error) {
       console.error('❌ Error durante reparación de URLs:', error);
       alert('Error durante la reparación: ' + error.message);
-    } finally {
-      setSyncing(false);
     }
   };
 
   // Función para forzar recarga completa desde S3
   const forceReloadFromS3 = async () => {
     console.log('🔄 Forzando recarga completa desde S3...');
-    setSyncing(true);
     
     try {
       // Limpiar cache local
@@ -265,8 +260,6 @@ function SafeApp() {
     } catch (error) {
       console.error('❌ Error durante recarga forzada:', error);
       alert('Error durante la recarga: ' + error.message);
-    } finally {
-      setSyncing(false);
     }
   };
 
@@ -274,7 +267,6 @@ function SafeApp() {
   const loadPinsFromS3 = async () => {
     try {
       console.log('🔄 Loading pins from S3...');
-      setSyncing(true);
       
       const urlResult = await getUrl({
         key: 'shared/pins-database.json',
@@ -311,7 +303,6 @@ function SafeApp() {
   const savePinsToS3 = async (pinsToSave) => {
     try {
       console.log('💾 Saving pins to S3...');
-      setSyncing(true);
       
       const jsonData = JSON.stringify(pinsToSave, null, 2);
       const blob = new Blob([jsonData], { type: 'application/json' });
@@ -341,8 +332,6 @@ function SafeApp() {
       
     } catch (error) {
       console.error('❌ Error saving pins to S3:', error);
-    } finally {
-      setSyncing(false);
     }
   };
 
@@ -480,7 +469,7 @@ function SafeApp() {
       
       return () => clearTimeout(timeoutId);
     }
-  }, [pins, loading, syncing]);
+  }, [pins, loading]);
 
   // Función para guardar pin
   const savePin = useCallback((pinId) => {
@@ -802,7 +791,7 @@ function SafeApp() {
               onMouseEnter={(e) => e.target.style.backgroundColor = '#d50920'}
               onMouseLeave={(e) => e.target.style.backgroundColor = '#e60023'}
             >
-              ➕ Crear Pin
+              <i className="fas fa-plus"></i> Crear Pin
             </button>
             
             <div style={{
@@ -814,106 +803,6 @@ function SafeApp() {
           </div>
         </div>
       </header>
-
-      {/* Panel de Diagnósticos S3 */}
-      <div style={{
-        backgroundColor: diagnostics.s3Connection ? '#d4edda' : '#f8d7da',
-        borderLeft: `4px solid ${diagnostics.s3Connection ? '#28a745' : '#dc3545'}`,
-        padding: '16px 20px',
-        margin: '20px',
-        borderRadius: '8px'
-      }}>
-        <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          maxWidth: '1200px',
-          margin: '0 auto'
-        }}>
-          <div style={{ flex: 1 }}>
-            <h3 style={{ 
-              margin: '0 0 8px 0', 
-              color: diagnostics.s3Connection ? '#155724' : '#721c24',
-              fontSize: '16px'
-            }}>
-              🔍 Diagnóstico AWS S3: {diagnostics.s3Connection ? '✅ Conectado' : '❌ Sin conexión'}
-            </h3>
-            
-            <div style={{ 
-              fontSize: '14px', 
-              color: diagnostics.s3Connection ? '#155724' : '#721c24',
-              display: 'flex',
-              gap: '20px',
-              flexWrap: 'wrap'
-            }}>
-              <span>📡 Amplify: {diagnostics.amplifyConfigured ? '✅' : '❌'}</span>
-              <span>🗄️ Bucket: {diagnostics.bucket}</span>
-              <span>🌍 Región: {diagnostics.region}</span>
-              <span>📊 Pins cargados: {diagnostics.pinsLoaded >= 0 ? diagnostics.pinsLoaded : 'N/A'}</span>
-              {diagnostics.lastError && (
-                <span style={{ color: '#dc3545' }}>
-                  ⚠️ Error: {diagnostics.lastError}
-                </span>
-              )}
-            </div>
-          </div>
-          
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button
-              onClick={runDiagnostics}
-              disabled={syncing}
-              style={{
-                background: '#6c757d',
-                color: 'white',
-                border: 'none',
-                padding: '8px 16px',
-                borderRadius: '20px',
-                cursor: syncing ? 'not-allowed' : 'pointer',
-                fontSize: '14px',
-                opacity: syncing ? 0.7 : 1
-              }}
-            >
-              {syncing ? '🔄 Probando...' : '🔍 Probar Conexión'}
-            </button>
-            
-            {pins.length > 0 && (
-              <button
-                onClick={repairImageUrls}
-                disabled={syncing}
-                style={{
-                  background: '#ffc107',
-                  color: '#212529',
-                  border: 'none',
-                  padding: '8px 16px',
-                  borderRadius: '20px',
-                  cursor: syncing ? 'not-allowed' : 'pointer',
-                  fontSize: '14px',
-                  opacity: syncing ? 0.7 : 1
-                }}
-              >
-                {syncing ? '🔧 Reparando...' : '🔧 Reparar URLs'}
-              </button>
-            )}
-            
-            <button
-              onClick={forceReloadFromS3}
-              disabled={syncing}
-              style={{
-                background: '#17a2b8',
-                color: 'white',
-                border: 'none',
-                padding: '8px 16px',
-                borderRadius: '20px',
-                cursor: syncing ? 'not-allowed' : 'pointer',
-                fontSize: '14px',
-                opacity: syncing ? 0.7 : 1
-              }}
-            >
-              {syncing ? '🔄 Recargando...' : '🔄 Recargar S3'}
-            </button>
-          </div>
-        </div>
-      </div>
 
       {/* Main Content */}
       <main style={{ padding: '30px 20px' }}>
@@ -999,7 +888,7 @@ function SafeApp() {
                   backgroundColor: '#fafafa',
                   marginBottom: '20px'
                 }}>
-                  <div style={{ fontSize: '48px', marginBottom: '16px' }}>🖼️</div>
+                  <div style={{ fontSize: '48px', marginBottom: '16px' }}><i className="fas fa-image"></i></div>
                   <h3 style={{ margin: '0 0 8px 0', color: '#333' }}>Selecciona una imagen</h3>
                   <p style={{ color: '#666', marginBottom: '20px' }}>
                     Arrastra y suelta o haz clic para seleccionar
@@ -1196,7 +1085,7 @@ function SafeApp() {
                     color: '#666',
                     fontSize: '14px'
                   }}>
-                    ☁️ Subiendo imagen a AWS S3...
+                    <i className="fas fa-cloud-upload-alt"></i> Subiendo imagen a AWS S3...
                   </div>
                 )}
               </div>
@@ -1270,7 +1159,7 @@ function PinCard({ pin, isSaved, onSave }) {
             color: '#999',
             fontSize: '14px'
           }}>
-            🖼️
+            <i className="fas fa-image"></i>
             <br />
             Imagen no disponible
           </div>
@@ -1320,7 +1209,7 @@ function PinCard({ pin, isSaved, onSave }) {
             e.target.style.transform = 'scale(1)';
           }}
         >
-          {isSaved ? '❤️' : '🤍'}
+          <i className={isSaved ? 'fas fa-heart' : 'far fa-heart'}></i>
         </button>
       </div>
 
