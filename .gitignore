@@ -23,7 +23,7 @@ yarn-debug.log*
 yarn-error.log*
 
 # AWS
-aws-exports.js
+# aws-exports.js (commented out for deployment)
 amplify/
 .amplify/
 .env
