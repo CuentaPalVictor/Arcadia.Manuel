@@ -62,6 +62,214 @@ function SafeApp() {
   const [uploadTags, setUploadTags] = useState('');
   const [uploading, setUploading] = useState(false);
 
+  // Estado para diagnósticos
+  const [diagnostics, setDiagnostics] = useState({
+    amplifyConfigured: false,
+    s3Connection: false,
+    lastError: null,
+    pinsLoaded: 0
+  });
+
+  // Función de diagnóstico mejorada
+  const runDiagnostics = async () => {
+    console.log('🔍 Iniciando diagnósticos completos...');
+    
+    const newDiagnostics = {
+      amplifyConfigured: false,
+      s3Connection: false,
+      lastError: null,
+      pinsLoaded: 0,
+      identityPool: awsExports.aws_cognito_identity_pool_id,
+      bucket: awsExports.aws_user_files_s3_bucket,
+      region: awsExports.aws_user_files_s3_bucket_region
+    };
+
+    try {
+      // Test 1: Verificar configuración de Amplify
+      console.log('✅ Test 1: Configuración de Amplify');
+      console.log('Identity Pool:', newDiagnostics.identityPool);
+      console.log('S3 Bucket:', newDiagnostics.bucket);
+      console.log('Region:', newDiagnostics.region);
+      newDiagnostics.amplifyConfigured = true;
+
+      // Test 2: Probar conexión con S3 listando archivos
+      console.log('🔍 Test 2: Probando conexión con S3...');
+      
+      try {
+        const listResult = await list({
+          prefix: 'pins/',
+          options: {
+            accessLevel: 'guest',
+            pageSize: 5 // Solo listar 5 para prueba
+          }
+        });
+        
+        console.log('✅ Conexión S3 exitosa. Archivos encontrados:', listResult.results?.length || 0);
+        console.log('Archivos:', listResult.results);
+        newDiagnostics.s3Connection = true;
+        
+        // Test 3: Intentar cargar base de datos de pins
+        console.log('🔍 Test 3: Intentando cargar base de datos de pins...');
+        
+        try {
+          const urlResult = await getUrl({
+            key: 'shared/pins-database.json',
+            options: {
+              accessLevel: 'guest'
+            }
+          });
+          
+          console.log('✅ URL obtenida para pins-database.json:', urlResult.url.toString());
+          
+          const response = await fetch(urlResult.url.toString());
+          console.log('Respuesta del fetch:', response.status, response.statusText);
+          
+          if (response.ok) {
+            const data = await response.json();
+            console.log('✅ Base de datos cargada exitosamente:', data.length, 'pins');
+            console.log('Pins encontrados:', data);
+            newDiagnostics.pinsLoaded = data.length;
+            
+            // Verificar URLs de imágenes
+            console.log('🔍 Test 4: Verificando URLs de imágenes...');
+            
+            for (const pin of data.slice(0, 3)) { // Solo verificar las primeras 3
+              if (pin.src && pin.src.includes('arcadia.mx')) {
+                console.log(`🔍 Verificando imagen: ${pin.title}`);
+                console.log(`URL: ${pin.src}`);
+                
+                try {
+                  const imgResponse = await fetch(pin.src, { method: 'HEAD' });
+                  console.log(`${imgResponse.ok ? '✅' : '❌'} ${pin.title}: ${imgResponse.status}`);
+                } catch (imgError) {
+                  console.error(`❌ Error verificando ${pin.title}:`, imgError);
+                }
+              }
+            }
+            
+          } else if (response.status === 404) {
+            console.log('ℹ️ No existe base de datos de pins en S3 - esto es normal si es la primera vez');
+            newDiagnostics.pinsLoaded = -1; // Indica que no existe pero es normal
+          } else {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+        } catch (dbError) {
+          console.error('❌ Error cargando base de datos:', dbError);
+          newDiagnostics.lastError = dbError.message;
+        }
+        
+      } catch (s3Error) {
+        console.error('❌ Error de conexión S3:', s3Error);
+        newDiagnostics.s3Connection = false;
+        newDiagnostics.lastError = s3Error.message;
+      }
+      
+    } catch (generalError) {
+      console.error('❌ Error general en diagnósticos:', generalError);
+      newDiagnostics.lastError = generalError.message;
+    }
+    
+    setDiagnostics(newDiagnostics);
+    console.log('📋 Diagnósticos completados:', newDiagnostics);
+    
+    return newDiagnostics;
+  };
+
+  // Función para reparar URLs expiradas de imágenes S3
+  const repairImageUrls = async () => {
+    console.log('🔧 Iniciando reparación de URLs expiradas...');
+    setSyncing(true);
+    
+    try {
+      const repairedPins = [];
+      
+      for (const pin of pins) {
+        let repairedPin = { ...pin };
+        
+        // Solo procesar imágenes que parecen ser de S3 y tienen URLs expiradas
+        if (pin.src && pin.src.includes('arcadia.mx') && pin.src.includes('X-Amz-Expires')) {
+          console.log(`🔧 Reparando URL para: ${pin.title}`);
+          
+          try {
+            // Extraer la key de S3 de la URL
+            const urlObj = new URL(pin.src);
+            const pathParts = urlObj.pathname.split('/');
+            const key = pathParts.slice(1).join('/'); // Remover primer '/' vacío
+            
+            console.log(`Key extraída: ${key}`);
+            
+            // Generar nueva URL con expiración de 1 año
+            const newUrlResult = await getUrl({
+              key: key,
+              options: {
+                accessLevel: 'guest',
+                expiresIn: 3600 * 24 * 365 // 1 año
+              }
+            });
+            
+            repairedPin.src = newUrlResult.url.toString();
+            console.log(`✅ URL reparada para: ${pin.title}`);
+            
+          } catch (repairError) {
+            console.error(`❌ Error reparando ${pin.title}:`, repairError);
+            // Mantener la URL original si falla la reparación
+          }
+        }
+        
+        repairedPins.push(repairedPin);
+      }
+      
+      // Actualizar estado con URLs reparadas
+      setPins(repairedPins);
+      
+      // Guardar en S3 y localStorage
+      await savePinsToS3(repairedPins);
+      
+      console.log('✅ Reparación de URLs completada');
+      alert('URLs de imágenes reparadas exitosamente');
+      
+    } catch (error) {
+      console.error('❌ Error durante reparación de URLs:', error);
+      alert('Error durante la reparación: ' + error.message);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // Función para forzar recarga completa desde S3
+  const forceReloadFromS3 = async () => {
+    console.log('🔄 Forzando recarga completa desde S3...');
+    setSyncing(true);
+    
+    try {
+      // Limpiar cache local
+      localStorage.removeItem('arcadia_pins');
+      localStorage.removeItem('arcadia_pins_timestamp');
+      
+      // Intentar cargar desde S3
+      const s3Pins = await loadPinsFromS3();
+      
+      if (s3Pins && s3Pins.length > 0) {
+        alert(`✅ Recarga exitosa: ${s3Pins.length} pins cargados desde S3`);
+      } else {
+        // Si no hay pins en S3, usar datos de muestra
+        console.log('ℹ️ No hay pins en S3, usando datos de muestra');
+        setPins(samplePins);
+        await savePinsToS3(samplePins);
+        alert('ℹ️ No se encontraron pins en S3. Se han inicializado con datos de muestra.');
+      }
+      
+      // Ejecutar diagnósticos después de la recarga
+      await runDiagnostics();
+      
+    } catch (error) {
+      console.error('❌ Error durante recarga forzada:', error);
+      alert('Error durante la recarga: ' + error.message);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   // Función para cargar pins desde S3
   const loadPinsFromS3 = async () => {
     try {
@@ -196,11 +404,14 @@ function SafeApp() {
     }
   };
 
-  // Inicializar datos con sincronización S3
+  // Inicializar datos con sincronización S3 y diagnósticos
   useEffect(() => {
     console.log('🔄 Initializing SafeApp with S3 sync...');
     
     const initializePins = async () => {
+      // Ejecutar diagnósticos primero
+      const diagnosticResults = await runDiagnostics();
+      
       // Primero intentar cargar desde localStorage (cache rápido)
       let localPins = [];
       let useLocal = false;
@@ -603,6 +814,106 @@ function SafeApp() {
           </div>
         </div>
       </header>
+
+      {/* Panel de Diagnósticos S3 */}
+      <div style={{
+        backgroundColor: diagnostics.s3Connection ? '#d4edda' : '#f8d7da',
+        borderLeft: `4px solid ${diagnostics.s3Connection ? '#28a745' : '#dc3545'}`,
+        padding: '16px 20px',
+        margin: '20px',
+        borderRadius: '8px'
+      }}>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          maxWidth: '1200px',
+          margin: '0 auto'
+        }}>
+          <div style={{ flex: 1 }}>
+            <h3 style={{ 
+              margin: '0 0 8px 0', 
+              color: diagnostics.s3Connection ? '#155724' : '#721c24',
+              fontSize: '16px'
+            }}>
+              🔍 Diagnóstico AWS S3: {diagnostics.s3Connection ? '✅ Conectado' : '❌ Sin conexión'}
+            </h3>
+            
+            <div style={{ 
+              fontSize: '14px', 
+              color: diagnostics.s3Connection ? '#155724' : '#721c24',
+              display: 'flex',
+              gap: '20px',
+              flexWrap: 'wrap'
+            }}>
+              <span>📡 Amplify: {diagnostics.amplifyConfigured ? '✅' : '❌'}</span>
+              <span>🗄️ Bucket: {diagnostics.bucket}</span>
+              <span>🌍 Región: {diagnostics.region}</span>
+              <span>📊 Pins cargados: {diagnostics.pinsLoaded >= 0 ? diagnostics.pinsLoaded : 'N/A'}</span>
+              {diagnostics.lastError && (
+                <span style={{ color: '#dc3545' }}>
+                  ⚠️ Error: {diagnostics.lastError}
+                </span>
+              )}
+            </div>
+          </div>
+          
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              onClick={runDiagnostics}
+              disabled={syncing}
+              style={{
+                background: '#6c757d',
+                color: 'white',
+                border: 'none',
+                padding: '8px 16px',
+                borderRadius: '20px',
+                cursor: syncing ? 'not-allowed' : 'pointer',
+                fontSize: '14px',
+                opacity: syncing ? 0.7 : 1
+              }}
+            >
+              {syncing ? '🔄 Probando...' : '🔍 Probar Conexión'}
+            </button>
+            
+            {pins.length > 0 && (
+              <button
+                onClick={repairImageUrls}
+                disabled={syncing}
+                style={{
+                  background: '#ffc107',
+                  color: '#212529',
+                  border: 'none',
+                  padding: '8px 16px',
+                  borderRadius: '20px',
+                  cursor: syncing ? 'not-allowed' : 'pointer',
+                  fontSize: '14px',
+                  opacity: syncing ? 0.7 : 1
+                }}
+              >
+                {syncing ? '🔧 Reparando...' : '🔧 Reparar URLs'}
+              </button>
+            )}
+            
+            <button
+              onClick={forceReloadFromS3}
+              disabled={syncing}
+              style={{
+                background: '#17a2b8',
+                color: 'white',
+                border: 'none',
+                padding: '8px 16px',
+                borderRadius: '20px',
+                cursor: syncing ? 'not-allowed' : 'pointer',
+                fontSize: '14px',
+                opacity: syncing ? 0.7 : 1
+              }}
+            >
+              {syncing ? '🔄 Recargando...' : '🔄 Recargar S3'}
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* Main Content */}
       <main style={{ padding: '30px 20px' }}>
