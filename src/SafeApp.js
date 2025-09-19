@@ -3,10 +3,13 @@ import { Amplify } from 'aws-amplify';
 import { uploadData, getUrl } from 'aws-amplify/storage';
 import awsExports from './aws-exports';
 
-// Configurar Amplify con manejo de errores
+// Configurar Amplify con manejo de errores mejorado
 try {
+  // Usar configuración estándar de Amplify
   Amplify.configure(awsExports);
-  console.log('✅ Amplify configured successfully:', awsExports);
+  console.log('✅ Amplify configured successfully');
+  console.log('✅ Identity Pool:', awsExports.aws_cognito_identity_pool_id);
+  console.log('✅ S3 Bucket:', awsExports.aws_user_files_s3_bucket);
 } catch (error) {
   console.error('❌ Amplify configuration error:', error);
 }
@@ -182,19 +185,24 @@ function SafeApp() {
       const timestamp = Date.now();
       const s3Key = `pins/${timestamp}_${uploadFile.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
       
-      console.log('Subiendo a S3 with key:', s3Key);
+      console.log('🔼 Iniciando upload a S3 con key:', s3Key);
+      console.log('📊 Configuración actual:', {
+        identityPoolId: awsExports.aws_cognito_identity_pool_id,
+        bucket: awsExports.aws_user_files_s3_bucket,
+        region: awsExports.aws_user_files_s3_bucket_region
+      });
       
-      // Subir a S3 usando AWS Amplify Storage
+      // Subir a S3 usando AWS Amplify Storage (formato estándar)
       const result = await uploadData({
         key: s3Key,
         data: compressedBlob,
         options: {
           contentType: 'image/jpeg',
-          accessLevel: 'guest'
+          accessLevel: 'guest' // Acceso público sin autenticación
         }
-      });
+      }).result;
       
-      console.log('Upload result:', result);
+      console.log('✅ Upload result:', result);
       
       // Obtener URL pública
       const urlResult = await getUrl({
@@ -230,8 +238,25 @@ function SafeApp() {
       alert('¡Pin subido exitosamente!');
       
     } catch (error) {
-      console.error('Error uploading to S3:', error);
-      alert('Error al subir la imagen: ' + (error.message || 'Error desconocido'));
+      console.error('❌ Error uploading to S3:', error);
+      
+      // Manejo específico de errores comunes
+      let errorMessage = 'Error desconocido';
+      if (error.message?.includes('Credentials')) {
+        errorMessage = 'Error de credenciales AWS. Verifica que el Identity Pool esté configurado correctamente.';
+        console.error('🔑 Verifica en AWS Console:');
+        console.error('1. Identity Pool existe:', awsExports.Auth.identityPoolId);
+        console.error('2. Permite acceso no autenticado (Unauthenticated access)');
+        console.error('3. El rol Unauth tiene permisos para S3');
+      } else if (error.message?.includes('Access Denied')) {
+        errorMessage = 'Acceso denegado a S3. Verifica permisos del bucket y roles IAM.';
+      } else if (error.message?.includes('Network')) {
+        errorMessage = 'Error de red. Verifica tu conexión a internet.';
+      } else {
+        errorMessage = error.message || 'Error desconocido';
+      }
+      
+      alert('Error al subir la imagen: ' + errorMessage);
     } finally {
       setUploading(false);
     }
