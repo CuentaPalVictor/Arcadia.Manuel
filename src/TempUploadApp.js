@@ -95,14 +95,30 @@ function TempUploadApp() {
     setLoading(false);
   }, []);
 
-  // Guardar pins temporales
+  // Guardar pins temporales con manejo de errores mejorado
   useEffect(() => {
     if (!loading && pins.length > samplePins.length) {
       try {
         const userPins = pins.filter(pin => !samplePins.find(sp => sp.id === pin.id));
+        
+        // Calcular tamaño estimado
+        const dataSize = JSON.stringify(userPins).length;
+        const sizeMB = (dataSize / (1024 * 1024)).toFixed(2);
+        
+        console.log(`💾 Saving ${userPins.length} pins (${sizeMB} MB) to localStorage`);
+        
         localStorage.setItem('arcadia_pins_temp', JSON.stringify(userPins));
+        localStorage.setItem('arcadia_pins_temp_count', userPins.length.toString());
+        localStorage.setItem('arcadia_pins_temp_size', sizeMB);
+        
       } catch (error) {
-        console.warn('Error saving pins:', error);
+        console.error('❌ Error saving pins to localStorage:', error);
+        
+        if (error.name === 'QuotaExceededError') {
+          // Alertar al usuario sobre el límite de almacenamiento
+          const userPins = pins.filter(pin => !samplePins.find(sp => sp.id === pin.id));
+          alert(`⚠️ Límite de almacenamiento alcanzado!\n\nTienes ${userPins.length} imágenes guardadas localmente.\n\nPara guardar más imágenes:\n1. Usa el modo AWS S3\n2. O elimina algunas imágenes locales`);
+        }
       }
     }
   }, [pins, loading]);
@@ -122,6 +138,22 @@ function TempUploadApp() {
       console.warn('Error saving user:', error);
     }
   }, [currentUser]);
+
+  // Función para eliminar pin (solo pins locales)
+  const deletePin = useCallback((pinId) => {
+    const pin = pins.find(p => p.id === pinId);
+    if (!pin) return;
+    
+    // Solo permitir eliminar pins locales (no los de ejemplo)
+    if (!samplePins.find(sp => sp.id === pinId)) {
+      if (confirm(`¿Seguro que quieres eliminar "${pin.title}"?`)) {
+        setPins(prevPins => prevPins.filter(p => p.id !== pinId));
+        console.log(`🗑️ Pin eliminado: ${pin.title}`);
+      }
+    } else {
+      alert('No puedes eliminar los pins de ejemplo');
+    }
+  }, [pins]);
 
   // Función para manejar archivos (temporal con base64)
   const handleFileSelect = (event) => {
@@ -233,7 +265,7 @@ function TempUploadApp() {
       backgroundColor: '#f5f5f5',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
     }}>
-      {/* AWS Warning Banner */}
+      {/* AWS Warning Banner with Storage Info */}
       <div style={{
         backgroundColor: '#fff3cd',
         border: '1px solid #ffeaa7',
@@ -242,10 +274,20 @@ function TempUploadApp() {
         fontSize: '14px',
         color: '#856404'
       }}>
-        ⚠️ <strong>Modo Temporal:</strong> Las imágenes se guardan localmente. 
-        <a href="/AWS_SETUP_GUIDE.md" style={{ color: '#e60023', marginLeft: '10px' }}>
-          Ver guía para configurar AWS S3 →
-        </a>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', gap: '20px' }}>
+          <div>
+            ⚠️ <strong>Modo Temporal:</strong> Las imágenes se guardan localmente.
+          </div>
+          
+          <div style={{ fontSize: '12px', display: 'flex', gap: '15px' }}>
+            <span>📷 Pins locales: {pins.length - samplePins.length}</span>
+            <span>💾 Tamaño: {localStorage.getItem('arcadia_pins_temp_size') || '0'} MB</span>
+          </div>
+          
+          <a href="/AWS_SETUP_GUIDE.md" style={{ color: '#e60023', textDecoration: 'underline' }}>
+            Configurar AWS S3 →
+          </a>
+        </div>
       </div>
 
       {/* Header */}
@@ -354,6 +396,8 @@ function TempUploadApp() {
                   pin={pin}
                   isSaved={currentUser.savedPins.includes(pin.id)}
                   onSave={() => savePin(pin.id)}
+                  onDelete={() => deletePin(pin.id)}
+                  canDelete={!samplePins.find(sp => sp.id === pin.id)}
                 />
               ))}
             </div>
@@ -589,8 +633,8 @@ function TempUploadApp() {
   );
 }
 
-// Componente de Pin Card (igual que antes)
-function PinCard({ pin, isSaved, onSave }) {
+// Componente de Pin Card con opción de eliminar
+function PinCard({ pin, isSaved, onSave, onDelete, canDelete }) {
   const [imageError, setImageError] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
 
@@ -690,6 +734,44 @@ function PinCard({ pin, isSaved, onSave }) {
         >
           {isSaved ? '❤️' : '🤍'}
         </button>
+
+        {/* Botón de eliminar para pins locales */}
+        {canDelete && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            style={{
+              position: 'absolute',
+              top: '12px',
+              left: '12px',
+              background: 'rgba(255,255,255,0.9)',
+              color: '#dc3545',
+              border: 'none',
+              borderRadius: '50%',
+              width: '36px',
+              height: '36px',
+              cursor: 'pointer',
+              fontSize: '16px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+              transition: 'all 0.2s'
+            }}
+            onMouseEnter={(e) => {
+              e.target.style.background = '#dc3545';
+              e.target.style.color = 'white';
+            }}
+            onMouseLeave={(e) => {
+              e.target.style.background = 'rgba(255,255,255,0.9)';
+              e.target.style.color = '#dc3545';
+            }}
+          >
+            🗑️
+          </button>
+        )}
       </div>
 
       <div style={{ padding: '16px' }}>

@@ -252,13 +252,22 @@ function App() {
         localStorage.setItem('arcadia_pins', JSON.stringify(compressedPins));
       } catch (e) {
         console.error('Error saving to localStorage:', e);
-        if (e.name === 'QuotaExceededError' && pins.length > 10) {
+        if (e.name === 'QuotaExceededError') {
+          console.warn('⚠️ localStorage quota exceeded. Consider using AWS S3 mode instead of local storage.');
+          // En lugar de eliminar pins, solo comprimir más agresivamente
           try {
-            const reducedPins = pins.slice(-10);
-            localStorage.setItem('arcadia_pins', JSON.stringify(reducedPins));
-            setPins(reducedPins);
+            const superCompressedPins = await Promise.all(
+              pins.map(async pin => ({
+                ...pin,
+                src: pin.src.length > 50000 ? await compressImage(pin.src, 0.3) : pin.src
+              }))
+            );
+            localStorage.setItem('arcadia_pins', JSON.stringify(superCompressedPins));
+            console.log('✅ Saved with aggressive compression');
           } catch (e2) {
-            console.error('Failed to save even with reduced data:', e2);
+            console.error('❌ Failed to save even with super compression:', e2);
+            // Como último recurso, avisar al usuario en lugar de eliminar datos
+            alert('Memoria local llena. Por favor usa el modo AWS S3 para guardar más imágenes.');
           }
         }
       }

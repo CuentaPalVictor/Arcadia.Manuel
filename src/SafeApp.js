@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Amplify } from 'aws-amplify';
-import { uploadData, getUrl } from 'aws-amplify/storage';
+import { uploadData, getUrl, remove, list } from 'aws-amplify/storage';
 import awsExports from './aws-exports';
 
 // Configurar Amplify con manejo de errores mejorado
@@ -122,10 +122,77 @@ function SafeApp() {
       // Actualizar timestamp en localStorage
       localStorage.setItem('arcadia_pins_timestamp', Date.now().toString());
       
+      // Ejecutar limpieza de imágenes huérfanas cada 10 saves
+      const saveCount = parseInt(localStorage.getItem('arcadia_save_count') || '0') + 1;
+      localStorage.setItem('arcadia_save_count', saveCount.toString());
+      
+      if (saveCount % 10 === 0) {
+        // Ejecutar limpieza en background sin bloquear la UI
+        setTimeout(() => cleanupOrphanedS3Images(pinsToSave), 1000);
+      }
+      
     } catch (error) {
       console.error('❌ Error saving pins to S3:', error);
     } finally {
       setSyncing(false);
+    }
+  };
+
+  // Función para limpiar imágenes huérfanas en S3
+  const cleanupOrphanedS3Images = async (currentPins) => {
+    try {
+      console.log('🧹 Cleaning up orphaned S3 images...');
+      
+      // Listar todas las imágenes en S3
+      const s3Images = await list({
+        prefix: 'pins/',
+        options: {
+          accessLevel: 'guest'
+        }
+      });
+      
+      // Obtener URLs de imágenes que están actualmente en uso
+      const pinsInUse = currentPins
+        .filter(pin => pin.src && pin.src.includes('arcadia.mx'))
+        .map(pin => {
+          // Extraer la key de S3 de la URL
+          const match = pin.src.match(/pins\/[^?]+/);
+          return match ? match[0] : null;
+        })
+        .filter(Boolean);
+      
+      // Encontrar imágenes huérfanas
+      const orphanedImages = s3Images.results?.filter(item => 
+        !pinsInUse.includes(item.key)
+      ) || [];
+      
+      if (orphanedImages.length > 0) {
+        console.log(`🗑️ Found ${orphanedImages.length} orphaned images in S3`);
+        
+        // Eliminar imágenes huérfanas (máximo 5 por vez para no sobrecargar)
+        const imagesToDelete = orphanedImages.slice(0, 5);
+        
+        for (const image of imagesToDelete) {
+          try {
+            await remove({
+              key: image.key,
+              options: {
+                accessLevel: 'guest'
+              }
+            });
+            console.log(`✅ Deleted orphaned image: ${image.key}`);
+          } catch (deleteError) {
+            console.warn(`⚠️ Failed to delete ${image.key}:`, deleteError);
+          }
+        }
+        
+        console.log(`✅ Cleanup complete. Deleted ${imagesToDelete.length} orphaned images.`);
+      } else {
+        console.log('✅ No orphaned images found in S3');
+      }
+      
+    } catch (error) {
+      console.warn('⚠️ Error during S3 cleanup:', error);
     }
   };
 
