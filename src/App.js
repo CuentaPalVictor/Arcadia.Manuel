@@ -3,7 +3,8 @@ import SafeApp from './SafeApp';
 import TempUploadApp from './TempUploadApp';
 
 function App() {
-  const [useTemp, setUseTemp] = useState(false);
+  // Iniciar en modo temporal por defecto para evitar errores de Cognito
+  const [useTemp, setUseTemp] = useState(true);
   
   // Selector de versión con estilo
   const VersionSelector = () => (
@@ -48,7 +49,7 @@ function App() {
           fontSize: '12px'
         }}
       >
-        Temporal
+        Temporal ✅
       </button>
     </div>
   );

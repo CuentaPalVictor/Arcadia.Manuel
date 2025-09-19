@@ -3,8 +3,13 @@ import { Amplify } from 'aws-amplify';
 import { uploadData, getUrl } from 'aws-amplify/storage';
 import awsExports from './aws-exports';
 
-// Configurar Amplify
-Amplify.configure(awsExports);
+// Configurar Amplify con manejo de errores
+try {
+  Amplify.configure(awsExports);
+  console.log('✅ Amplify configured successfully:', awsExports);
+} catch (error) {
+  console.error('❌ Amplify configuration error:', error);
+}
 
 // Datos de muestra seguros
 const samplePins = [
@@ -55,24 +60,33 @@ function SafeApp() {
 
   // Inicializar datos de forma segura
   useEffect(() => {
+    console.log('🔄 Initializing SafeApp...');
+    
     try {
       const storedPins = localStorage.getItem('arcadia_pins');
       if (storedPins) {
         const parsed = JSON.parse(storedPins);
         if (Array.isArray(parsed)) {
           setPins(parsed);
+          console.log('✅ Loaded pins from localStorage:', parsed.length);
         } else {
           setPins(samplePins);
+          console.log('✅ Using sample pins (invalid localStorage data)');
         }
       } else {
         setPins(samplePins);
+        console.log('✅ Using sample pins (no localStorage data)');
       }
     } catch (error) {
-      console.warn('Error loading pins from localStorage:', error);
+      console.warn('⚠️ Error loading pins from localStorage:', error);
       setPins(samplePins);
     }
     
-    setLoading(false);
+    // IMPORTANTE: Siempre terminar el loading
+    setTimeout(() => {
+      setLoading(false);
+      console.log('✅ SafeApp initialization complete');
+    }, 100);
   }, []);
 
   // Guardar pins de forma segura
